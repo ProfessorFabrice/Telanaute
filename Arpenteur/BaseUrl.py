@@ -1,0 +1,304 @@
+#!/usr/bin/python3
+
+import sys
+import re
+
+from .Url import Url
+
+try :
+	import pgdb
+except :
+	try:
+		import psycopg as pgdb
+	except:
+		print "Chargement module de connexion à postgres impossible => ARRET"
+		sys.exit(1)
+
+##
+# cette classe est utilise pour l'interaction entre RobotBroute et la base
+# @param collection Instance de la classe Collection
+# @param option Instance de la classe Option
+# @param erreurLog Instance de la classe ErreurLog
+
+class BaseUrl :
+
+	# constructeur
+    
+	def __init__(self,option,collection,erreurLog):
+		self.erreurLog=erreurLog
+		self.nomCollection = collection.getNomCollection()
+		self.racine = option.getRacine()
+		self.add_sep = re.compile("(...)(...)(...)")
+		self.conv_date = re.compile("(..-..)-(..)")
+		self.erreurNormale=re.compile("(Cannot insert a duplicate key into unique index)|(duplicate key violates unique constraint)|(une clé dupliquée rompt la contrainte unique)")
+		self.db = None
+		try:
+			self.db = pgdb.connect("dbname="+option.getNomBase()+" host="+option.getMachine()+" port="+str(option.getPort())+" user="+option.getUtilisateur()+" password="+option.getMdp())
+		except Exception,msg:
+			self.erreurLog.erreur(self.__class__.__name__,__name__,"pb connexion base",1,msg)
+            
+
+	##
+	# methode permettant de couper l'acces a la base
+	def bdFin(self):
+		self.db.close()
+                
+    ##
+    # methode permettant de convertir un enregistrement postgres vers un objet url
+    # @param enr l'enregistrement issu de la base
+    # @return une instance de l'objet url
+	def __convertEnrToUrl(self,enr):
+		if enr[3] != 0 :
+			urlName=enr[1]
+		else :
+			idUrl="0"*(9-len(str(enr[0])))+str(enr[0])
+			urlName='file://'+self.racine+self.add_sep.sub("/data/\g<1>/\g<2>/\g<3>/source",idUrl)
+		return Url(enr[0],urlName,enr[3],enr[2],None,None,None,self.erreurLog)
+
+
+	##
+	# methode permettant de recuperer de la base les valeurs max et courante pour le nombre de page par site
+	# @return dictionnaire cle:site valeur:[valeur,valeurmax,id_base,valeur_origine]
+	def getPagesParSite(self) :
+        # Creation de la requete SQL
+		requeteSql = """ SELECT * FROM site_"""+self.nomCollection+""" ; """
+        
+		# creation des cursors
+		curs=self.db.cursor()
+        
+		# lancement de la requete
+		try :
+			curs.execute(requeteSql)
+			self.db.commit()
+		except Exception,msg:
+			self.erreurLog.erreur(self.__class__.__name__,__name__,"erreur recuperation UrlATraiter",1,msg)
+
+		# Recuperation du resultat
+		PagesParSite={}
+		while 1 :
+			enr=curs.fetchone()
+			if not enr :
+				break
+			PagesParSite[enr[1]]=[enr[2],enr[3],enr[0],enr[2]]
+
+		# return
+		return PagesParSite
+       
+	##
+	# methode permettant de mettre à jour la base pour les nouveaux site
+	# @param PagesParSite une liste [site,nombre de page]
+	def putNouvPagesParSite(self,PagesParSite) :
+		# Creation de la requete SQL
+		requeteSql = """INSERT INTO site_"""+self.nomCollection+""" (site,nb) VALUES (%s,%d) ;"""
+		requeteSql2 = """UPDATE site_"""+self.nomCollection+""" SET nb=nb+%d WHERE site=%s ;"""
+
+		# creation des cursors
+		curs=self.db.cursor()
+
+		# Il n'est pas possible de faire un executemany en effet, une autre machine a tres bien pu le faire entre temps
+		for enr in PagesParSite :
+			try :
+				curs.execute("INSERT INTO site_"""+self.nomCollection+" (site,nb) VALUES ('"+enr[0]+"',"+str(enr[1])+");")
+			except Exception,msg:
+				self.erreurLog.erreur(self.__class__.__name__,__name__,"PB PB 1 "+str(enr),1,msg)
+				try:
+					curs.execute("UPDATE site_"+self.nomCollection+" SET nb=nb+"+str(enr[1])+" WHERE site='"+enr[0]+"';")
+				except Exception,msg:
+				    self.erreurLog.erreur(self.__class__.__name__,__name__,"PB PB 2 "+str(enr),1,msg)
+					#pass  code pour eviter le plantage ???
+
+		self.db.commit()
+		curs.close()
+
+
+	##
+	# methode permettant de mettre  jour la base pour les sites deja presents dans la base
+	# @param PagesParSite une liste [nombre de page,id_base_site]
+	def putModifPagesParSite(self,PagesParSite) :
+		curs=self.db.cursor()
+		# Creation de la requete SQL
+		for enr in PagesParSite:
+			requeteSql = "UPDATE site_"+self.nomCollection+" SET nb=nb+"+str(enr[0])+" WHERE id_site="+str(enr[1])+";"
+			curs.execute(requeteSql)
+		self.db.commit()
+		curs.close()
+		#self.__executemany(requeteSql,PagesParSite)
+
+	##
+	# methode permettant de recuperer de la base un ensemble d'url a traiter
+	# @param nbUrlATraiter nombre d'element a extraire de la base
+	# @param tampon un tampon (peut-etre un tableau, une Queue, ...)
+	# @param methodeTampon nom de la methode pour inserer un element dans le tampon (append : tableau, put : Queue, ...)
+	# @param *args les arguments de la methode de nom methodeTampon separes par une virgule
+	def getATraiter(self,nbUrlATraiter,tampon,nomMethodeTampon,*args) :
+        # Creation de la requete SQL
+		requeteSql = """    SELECT u.id_url,u.url,u.nb_try,u.etat 
+							FROM (SELECT id_url FROM (SELECT id_url FROM """+self.nomCollection+""" WHERE etat=1 LIMIT """+str(10*nbUrlATraiter)+""" ) as x ORDER BY RANDOM() LIMIT """+str(nbUrlATraiter)+""" ) as c
+								INNER JOIN url as u 
+								USING (id_url) ; """
+        
+		# creation des cursors
+		curs=self.db.cursor()
+        
+		# lancement de la requete
+		try :
+			curs.execute(requeteSql)
+			self.db.commit()
+		except Exception,msg:
+			self.erreurLog.erreur(self.__class__.__name__,__name__,"erreur recuperation UrlATraiter",1,msg)
+        
+        #
+		# recuperation du resultat
+		tab=[]
+		# pointeur sur la methode
+		methode=getattr(tampon,nomMethodeTampon)
+		if len(args)>0 :
+			for enr in curs.fetchall():
+				tab.append(enr[0])
+				# ajoute l'url en debut de la liste des arguments
+				a=list(args)
+				a.insert(0,self.__convertEnrToUrl(enr))
+				apply(methode,a)
+		else :
+			for enr in curs.fetchall():
+				tab.append(enr[0])
+				methode(self.__convertEnrToUrl(enr))
+		
+        
+		# liberation curseur
+		curs.close()
+
+		# maj dans la base
+		self.setEtatCollection(tab,2)
+        
+        
+	##
+	# methode permettant de mettre dans la base une nouvelle url
+	# @param url contient l'url a mettre dans la base
+	def putARangerN(self,url) :
+		curs=self.db.cursor()
+		try :
+			curs.execute("SELECT add_url_"+self.nomCollection+"('"+url.getUrl()+"');")
+		except  Exception,msg:
+			if not self.erreurNormale.search(str(msg)) :
+				self.erreurLog.erreur(self.__class__.__name__,__name__,"pb insertion "+url.getUrl(),-1,msg)
+		curs.close()
+		self.db.commit()      
+        
+	##
+	# methode permettant de mettre uniquement les etats d'une collection a une valeur definie
+	# @param tabUrl un tableau contenant des Url
+	# @param etatCollection la valeur a mettre pour etat_Collection
+	def setEtatCollection(self,tabUrl,etatCollection) :
+		if len(tabUrl) > 0 :
+			curs=self.db.cursor()
+			req="UPDATE "+self.nomCollection+" SET etat="+str(etatCollection)+" WHERE id_url IN "+re.sub(',\)',')',str(tuple(tabUrl)))
+			try :
+				curs.execute(req)
+			except Exception,msg:
+				self.erreurLog.erreur(self.__class__.__name__,__name__,req,-1,msg)
+			self.db.commit()
+			curs.close()
+			
+	##
+	# methode permettant de mettre uniquement les etats a une valeur definie
+	# @param tabUrl un tableau contenant des Url
+	# @param etatUrl la valeur a mettre pour etat_url
+	# @param etatCollection la valeur a mettre pour etat_Collection
+	def setEtats(self,tabUrl,etatUrl,etatCollection) :
+		if len(tabUrl) > 0 :
+			curs=self.db.cursor()
+			req="UPDATE "+self.nomCollection+" SET etat="+str(etatCollection)+" WHERE id_url IN "+re.sub(',\)',')',str(tuple(tabUrl)))
+			try :
+				curs.execute(req)
+			except Exception,msg:
+				self.erreurLog.erreur(self.__class__.__name__,__name__,req,-1,msg)
+			req="UPDATE url SET etat="+str(etatUrl)+" WHERE id_url IN "+re.sub(',\)',')',str(tuple(tabUrl)))
+			try :
+				curs.execute(req)
+			except Exception,msg:
+				self.erreurLog.erreur(self.__class__.__name__,__name__,req,-1,msg)
+			self.db.commit()
+			curs.close()
+			
+	##
+	# methode permettant de faire un executemany
+	# @param req la requete SQL
+	# @param tab la liste de liste pour l'excutemany
+	def __executemany(self,req,tab) :
+		if len(tab) > 0:
+			curs=self.db.cursor()
+			try :
+				curs.executemany(req,tab)
+			except Exception,msg:
+				self.erreurLog.erreur(self.__class__.__name__,__name__,req,-1,msg)
+			self.db.commit()
+			curs.close()
+        
+	##
+	# methode permettant de mettre a jour les url telechargees et traitees
+	# @param url une Url
+	def putARangerTT(self,url) :
+		curs=self.db.cursor()
+		try :
+			curs.execute("UPDATE "+self.nomCollection+" SET etat=0 WHERE id_url="+str(url.getIdUrl())+";")
+		except  Exception,msg:
+			self.erreurLog.erreur(self.__class__.__name__,__name__,"pb maj etat=0 dans "+self.nomCollection+" "+str(url.getIdUrl()),-1,msg)
+		try :
+			curs.execute("UPDATE url SET etat=0,nb_try="+str(url.getNbTry())+",date='"+self.conv_date.sub("\g<1>-20\g<2>",url.getDate())+"' WHERE id_url="+str(url.getIdUrl())+";")
+		except  Exception,msg:
+			self.erreurLog.erreur(self.__class__.__name__,__name__,"pb maj etat=0 dans url "+str(url.getIdUrl()),-1,msg)
+		self.db.commit()      
+		curs.close()
+        
+	##
+	# methode permettant de mettre a jour les url telechargees et rejetees
+	# @param url une Url
+	## ATTENTION pb de date dans l'objet url : url.GetDate() -> None -> ???
+	# vient peut être de l'ajout d'une url sans date dans FiltreUrl qd il y a rejet
+	def putARangerTR(self,url) :
+		curs=self.db.cursor()
+		try :
+			curs.execute("UPDATE "+self.nomCollection+" SET etat=4 WHERE id_url="+str(url.getIdUrl())+";")
+		except  Exception,msg:
+			self.erreurLog.erreur(self.__class__.__name__,__name__,"pb maj etat=4 dans "+self.nomCollection+" "+str(url.getIdUrl()),-1,msg)
+		try :
+			curs.execute("UPDATE url SET etat=0,nb_try="+str(url.getNbTry())+",date='"+self.conv_date.sub("\g<1>-20\g<2>",url.getDate())+"' WHERE id_url="+str(url.getIdUrl())+";")
+		except  Exception,msg:
+			self.erreurLog.erreur(self.__class__.__name__,__name__,"pb maj etat=0 dans url "+str(url.getIdUrl()),-1,msg)
+		self.db.commit()
+		curs.close()
+
+	##
+	# methode permettant de mettre a jour les url en erreur 403 ou 404
+	# @param tab une liste contenant des urld
+	def putARangerE40X(self,tab) :
+		self.setEtats(tab,4,4)
+
+	##
+	# methode permettant de mettre a jour les url en erreur 900
+	# @param tab une liste contenant des urld
+	def putARangerE900(self,tab) :
+		self.setEtats(tab,1,4)
+
+	##
+	# methode permettant de remettre  les url a AFaire
+	# @param tab une liste contenant des urld
+	def putAFaire(self,tab) :
+		self.setEtats(tab,1,1)
+
+	##
+	# methode permettant de mettre a jour les url en erreur
+	# @param url contient l'url a mettre dans la base
+	def putARangerE(self,url) :
+		curs=self.db.cursor()
+		try :
+			curs.execute("UPDATE "+self.nomCollection+" SET etat=3 WHERE id_url="+str(url.getIdUrl())+";")
+		except  Exception,msg:
+			self.erreurLog.erreur(self.__class__.__name__,__name__,"pb maj etat=3 dans "+self.nomCollection+" "+str(url.getIdUrl())+" "+url.getDate(),-1,msg)
+		try :
+			curs.execute("UPDATE url SET etat=3,nb_try="+str(url.getNbTry())+",date='"+self.conv_date.sub("\g<1>-20\g<2>",url.getDate())+"' WHERE id_url="+str(url.getIdUrl())+";")
+		except  Exception,msg:
+			self.erreurLog.erreur(self.__class__.__name__,__name__,"pb maj etat=3 dans url "+str(url.getIdUrl())+" "+url.getDate(),-1,msg)
+		self.db.commit()      
+		curs.close()
