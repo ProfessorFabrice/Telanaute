@@ -1,0 +1,115 @@
+#!/usr/bin/python3
+
+import re
+import codecs
+
+# nettoyage html
+class Traite(object):
+	def __init__(self,nomCollection=''):
+		self.nom = 'html2Texte'
+		self.nomCollection = nomCollection 
+		# init
+		self.virenl = re.compile(r'[\r\t]')
+		self.virenl1 = re.compile(r'[ *\n]')
+		self.tabulations = re.compile(r'	+')
+		self.espaces = re.compile(r' +')		
+		self.vire_script = re.compile(r'<[Ss][Cc][Rr][iI][Pp][Tt](.|\n)*?<\/[Ss][Cc][Rr][iI][Pp][Tt]>')
+		self.vire_style = re.compile(r'<[Ss][tT][yY][Ll][Ee](.|\n)*?<\/[Ss][tT][yY][Ll][Ee]>')		
+		self.h = re.compile(r'<(\/?)[Hh][1-6].*?>')
+		self.gras = re.compile(r'<(\/?)[Bb]>')
+		self.italique = re.compile(r'<(\/?)[Ii]>')
+		self.date = re.compile(r'([0-9]+)\.([0-9]+)\.([0-9]+)')
+		self.www = re.compile(r'(www)\.(.*?)\.(fr|com|uk|net)')
+		self.adresse_internet = re.compile(r'(.*?(\@.*?)?)\.(fr|com|uk|net)')
+		self.sigle = re.compile(r'(([A-Z])\.([A-Z])\.)+')
+		# entities
+		self.listentite = {'nbsp':' ','[eE]acute':'é','Eacute':''}
+		self.ent_insecable = re.compile(r'&?nbsp;')
+		self.ent_eacute = re.compile(r'&?eacute;')
+		self.ent_Eacute = re.compile(r'&?Eacute;|&#201;')
+		self.ent_egrave = re.compile(r'&?egrave;')
+		self.ent_Egrave = re.compile(r'&?Egrave;|&?&#202;')
+		self.ent_agrave = re.compile(r'&?agrave;')
+		self.ent_Agrave = re.compile(r'&?Agrave;')
+		self.ent_ecirc = re.compile(r'&ecirc;')
+		self.ent_Ecirc = re.compile(r'&Ecirc;')
+		self.ent_icirc = re.compile(r'&icirc;')
+		self.ent_Icirc = re.compile(r'&Icirc;')
+		self.ent_amp = re.compile(r'&?amp;')
+		self.ent_euro = re.compile(r'&?euro;')
+		self.ent_quot = re.compile(r'&?quot;')
+		self.ent_apostrophe = re.compile(r'&#146;|&#8217;')
+		self.ent_laquo = re.compile(r'&?r[da]quo;')
+		self.ent_raquo = re.compile(r'&?r[da]quo;')		
+		self.ent_ccedil = re.compile(r'&ccedil;')		
+		self.ent_ocirc = re.compile(r'&ocirc;')
+		self.ent_rsquo = re.compile(r'&rsquo;')		
+		self.ent_gt = re.compile(r'&gt;')		
+		self.ent_deg = re.compile(r'&deg;')
+		self.ent_acirc = re.compile(r'&acirc;')
+		self.ent_Acirc = re.compile(r'&Acirc;')
+		self.ent_bull = re.compile(r'&bull;')
+		self.ent_iuml = re.compile(r'&iuml;')
+		self.ent_Iuml = re.compile(r'&Iuml;')
+		self.ent_copy = re.compile(r'&copy;')
+		self.vire_balise = re.compile(r'<[^@](.|\n)*?>')		
+		self.head = re.compile(r'<@(\/?)h(\n|.)*?>')
+		self.bold = re.compile(r'<@(\/?)b(.|\n)*?>')
+		self.italic = re.compile(r'<@(\/?)i(.|\n)*?>')
+		self.vire_chariot = re.compile(r'\n ([^\n])')			
+		
+	def traite(self,texte,nomfic):
+		res = texte
+		res = self.virenl.sub('',res)
+		res = self.tabulations.sub('',res)				
+		res = self.vire_script.sub('',res)
+		res = self.vire_style.sub('',res)		
+		res = self.h.sub('<@\\1h>',res)
+		res = self.gras.sub('<@\\1b>',res)
+		res = self.italique.sub('<@\\1i>',res)
+		res = self.ent_insecable.sub(' ',res)
+		res = self.ent_quot.sub('"',res)
+		res = self.ent_raquo.sub('"',res)
+		res = self.ent_eacute.sub('é',res)
+		res = self.ent_Eacute.sub('é',res)
+		res = self.ent_egrave.sub('è',res)
+		res = self.ent_Egrave.sub('è',res)
+		res = self.ent_agrave.sub('à',res)
+		res = self.ent_Agrave.sub('à',res)
+		res = self.ent_ecirc.sub('ê',res)
+		res = self.ent_Ecirc.sub('Ê',res)
+		res = self.ent_icirc.sub('î',res)
+		res = self.ent_Icirc.sub('Î',res)
+		res = self.ent_bull.sub('-',res)
+		res = self.ent_copy.sub('©',res)
+		res = self.ent_iuml.sub('ï',res)
+		res = self.ent_Iuml.sub('Ï',res)
+		
+		res = self.ent_Acirc.sub('Â',res)
+		res = self.ent_acirc.sub('â',res)
+		res = self.ent_deg.sub('°',res)
+		res = self.ent_ccedil.sub('ç',res)
+		res = self.ent_ocirc.sub('ô',res)
+		res = self.ent_rsquo.sub('\'',res)
+		res = self.ent_gt.sub('>',res)
+
+		res = self.ent_amp.sub('&',res)
+		res = self.ent_euro.sub('E',res)
+		res = self.ent_apostrophe.sub('\'',res)
+		res = self.ent_laquo.sub('\'',res)
+		res = self.ent_raquo.sub('\'',res)		
+		res = self.date.sub('\\1/\\2/\\3',res)
+		res = self.www.sub('\\1_\\2_\\3',res)
+		res = self.adresse_internet.sub('\\1_\\3',res)
+		res = self.sigle.sub('\\2_\\3_',res)		
+		res = self.vire_balise.sub('\n ',res)		
+		res = self.head.sub('<\\1h>',res)
+		res = self.bold.sub('<\\1b>',res)
+		res = self.italic.sub('<\\1i>',res)
+		res = self.vire_chariot.sub(' \\1',res)		
+		res = self.espaces.sub(' ',res)
+		res = self.virenl.sub('',res)		
+		return res
+
+	def close(self):
+		pass

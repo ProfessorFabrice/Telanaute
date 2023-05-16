@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf8"?>
+<!DOCTYPE collection SYSTEM "collection.dtd">
+<collection>
+	<nom>collemonde</nom>
+	<graine>
+		<url>http://www.lemonde.fr</url>
+	</graine>
+	<listefiltres>
+		<filtre type="url">UrlReject</filtre>
+		<filtre type="url">UrlAcceptLeMonde</filtre>
+	</listefiltres>
+	<listetraitements>
+		<traitement type="traite">html2Texte</traitement>
+		<traitement type="traite">decoupeMot</traitement>
+	</listetraitements>
+	<profondeur>10</profondeur>
+	<maxpagesparsite>10</maxpagesparsite>
+</collection>
